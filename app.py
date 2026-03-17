@@ -1,10 +1,77 @@
 import streamlit as st
 import pandas as pd
 import joblib
+import sqlite3
+from datetime import datetime
 
-# Load model
+# -----------------------------
+# DATABASE SETUP
+# -----------------------------
+DB_NAME = "predictions.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS predictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        season INTEGER,
+        yr INTEGER,
+        mnth INTEGER,
+        hr INTEGER,
+        holiday INTEGER,
+        weekday INTEGER,
+        workingday INTEGER,
+        weathersit INTEGER,
+        temp REAL,
+        atemp REAL,
+        hum REAL,
+        windspeed REAL,
+        prediction REAL
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_prediction(data, prediction):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    c.execute("""
+    INSERT INTO predictions (
+        timestamp, season, yr, mnth, hr, holiday,
+        weekday, workingday, weathersit,
+        temp, atemp, hum, windspeed, prediction
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        *data,
+        prediction
+    ))
+
+    conn.commit()
+    conn.close()
+
+def load_data():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM predictions", conn)
+    conn.close()
+    return df
+
+
+# -----------------------------
+# LOAD MODEL
+# -----------------------------
 model = joblib.load("model.joblib")
 
+# -----------------------------
+# UI
+# -----------------------------
 st.title("🚲 Bike Rental Prediction App")
 
 st.write(
@@ -13,7 +80,7 @@ st.write(
 
 st.header("Input Features")
 
-# Categorical inputs
+# Inputs
 season = st.selectbox(
     "Season",
     [1, 2, 3, 4],
@@ -42,16 +109,14 @@ weathersit = st.selectbox(
     }[x]
 )
 
-# Weather inputs
 temp = st.slider("Temperature (normalized)", 0.0, 1.0, 0.5)
-
 atemp = st.slider("Feeling Temperature (normalized)", 0.0, 1.0, 0.5)
-
 hum = st.slider("Humidity", 0.0, 1.0, 0.5)
-
 windspeed = st.slider("Wind Speed", 0.0, 1.0, 0.2)
 
-# Prediction
+# -----------------------------
+# PREDICTION
+# -----------------------------
 if st.button("Predict Bike Rentals"):
 
     data = pd.DataFrame({
@@ -69,8 +134,31 @@ if st.button("Predict Bike Rentals"):
         "windspeed": [windspeed]
     })
 
-    prediction = model.predict(data)
+    prediction = model.predict(data)[0]
 
     st.subheader("Prediction Result")
+    st.success(f"Estimated bike rentals: **{int(prediction)} bikes** 🚲")
 
-    st.success(f"Estimated bike rentals: **{int(prediction[0])} bikes** 🚲")
+    # SAVE TO DATABASE
+    input_list = [
+        season, yr, mnth, hr, holiday,
+        weekday, workingday, weathersit,
+        temp, atemp, hum, windspeed
+    ]
+
+    save_prediction(input_list, prediction)
+
+# -----------------------------
+# HISTORY SECTION
+# -----------------------------
+st.header("📊 Prediction History")
+
+history_df = load_data()
+
+if not history_df.empty:
+    st.dataframe(history_df)
+
+    st.subheader("Predictions Over Time")
+    st.line_chart(history_df["prediction"])
+else:
+    st.info("No predictions yet. Try making one!")
